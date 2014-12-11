@@ -1,14 +1,7 @@
-#include <stdlib.h>
-#include <stdio.h>
-#include <unistd.h>
+#include "include.h"
 #include "manconfig.h"
-
-
-#define N_PROC 3
-
-#define DEBUG
+#include "manstatistic.h"
 
 pid_t id_proc[N_PROC];
-
 
 int init();

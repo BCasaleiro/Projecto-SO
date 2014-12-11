@@ -4,9 +4,10 @@ int main (int argc, char const *argv[])
 {
     int i;
     config_struct* config;
+    stat_struct info;
 
     if(init() == 1){
-        perror("Init\n");
+        perror("In Init\n");
         return 1;
     }
 
@@ -15,7 +16,7 @@ int main (int argc, char const *argv[])
     for(i = 0; i < N_PROC; i++) {
         if(fork() == 0) {
             id_proc[i] = getpid();
-            printf("Child: %d\tFather: %d\n", getpid(), getppid());
+            //printf("Child: %d\tFather: %d\n", getpid(), getppid());
             switch(i){
                 case 0:
                     //Config Manager
@@ -23,11 +24,18 @@ int main (int argc, char const *argv[])
                     break;
                 case 1:{
                     //Stat Manager
-
+                    get_message();
                     break;
                 }
                 case 2:
                     //Main
+                    strcpy(info.file, "o godinho e gay");
+                    strcpy(info.request_arrival, "agora");
+                    strcpy(info.request_handled, "daqui a pouco");
+                    info.thread_number = 5;
+                    info.request_type = 0;
+
+                    msgsnd(mqid, &info, sizeof(info), 0);
                     break;
                 default:
                     perror("While creating process\n");
@@ -45,12 +53,10 @@ int main (int argc, char const *argv[])
     printf("Shared memory info\n");
     printf("p: %d\nn: %d\npl:%d\nns:%d\n", config->port, config->n_threads, config->policy, N_SCRIPTS);
 
-
-
     for(i = 0; i < N_SCRIPTS; i++){
         printf("script: %s", config->scripts[i]);
     }
-    
+
     sem_post(mutex);
 
     //destroy shared memory
@@ -63,6 +69,8 @@ int main (int argc, char const *argv[])
 int init()
 {
     config_struct* config;
+
+    writeHourPresent(sv_start);
 
     //Shared memory
     #ifdef DEBUG
@@ -82,6 +90,15 @@ int init()
 
     sem_unlink("MUTEX");
     mutex = sem_open("MUTEX", O_CREAT|O_EXCL, 0700, 1);
+
+    #ifdef DEBUG
+        printf("Creating message queue\n");
+    #endif
+
+    if ((mqid = msgget(IPC_PRIVATE, IPC_CREAT|0777)) < 0){
+        perror("While creating the message queue.");
+        exit(0);
+    }
 
     return 0;
 }

@@ -39,5 +39,6 @@ int configuration()
 
     sem_post(mutex);
 
+    fclose(fp);
     return 0;
 }

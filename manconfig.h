@@ -1,16 +1,7 @@
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
+#include "include.h"
 #include <sys/shm.h>
 #include <sys/ipc.h>
 #include <semaphore.h>
-
-
-#define CONFIG_FILE_NAME "config.txt"
-#define LENGTH_SCRIPT_NAME 31
-#define N_SCRIPTS 3
-
-#define DEBUG
 
 typedef struct{
     int port;

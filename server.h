@@ -1,6 +1,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
+#include "manconfig.h"
+
 
 #define N_PROC 3
 

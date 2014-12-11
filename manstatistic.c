@@ -14,7 +14,7 @@ void get_message(){
     while(1){
         //Waits to receive a message (FIFO)
         msgrcv(mqid, &info, sizeof(stat_struct), 0, 0);
-
+ 
         if(info .request_type == 0){
             total_din++;
         }

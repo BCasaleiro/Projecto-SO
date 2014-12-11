@@ -14,7 +14,7 @@ void get_message(){
     while(1){
         //Waits to receive a message (FIFO)
         msgrcv(mqid, &info, sizeof(stat_struct), 0, 0);
- 
+
         if(info .request_type == 0){
             total_din++;
         }
@@ -27,7 +27,7 @@ void get_message(){
 
         snprintf(line, 100 * sizeof(char),"[%d] File='%s' Thread=%d Time='%s' '%s'\n", info.request_type, info.file, info.thread_number, info.request_arrival, info.request_handled);
         printf("%s", line);
-        fprintf(fp, "%s", line);
+        //fprintf(fp, "%s", line);
         sleep(3);
     }
 

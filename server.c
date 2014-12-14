@@ -10,6 +10,10 @@ int main (int argc, char const *argv[])
         return 1;
     }
 
+    //signal(SIGINT, sigint_handler);
+    //signal(SIGTSTP, catch_ctrlz);
+    //signal(SIGHUP, sighup_handler);
+
     config = (config_struct*)shmat(shmid, NULL, 0);
 
     for(i = 0; i < N_PROC; i++) {
@@ -109,6 +113,17 @@ void main_process()
     n_threads = config->n_threads;
     sem_post(mutex);
 
+    create_buffer(n_threads);
+
+    sem_unlink("BUFFER_MUTEX");
+    buffer_mutex = sem_open("BUFFER_MUTEX", O_CREAT|O_EXCL, 0700, 1);
+
+    sem_unlink("EMPTY");
+    empty = sem_open("EMPTY", O_CREAT|O_EXCL, 0700, n_threads);
+
+    sem_unlink("FULL");
+    full = sem_open("FULL", O_CREAT|O_EXCL, 0700, 0);
+
     pthread_create(&scheduller_thread, NULL, scheduller, &id_scheduller);
 
     create_thread_pool(n_threads);
@@ -116,19 +131,34 @@ void main_process()
     pthread_join(scheduller_thread, NULL);
 }
 
+void create_buffer(int n_threads)
+{
+    if((buffer = malloc(2 * n_threads * sizeof(buffer_struct))) == NULL){
+        perror("While allocating space for buffer\n");
+    }
+}
+
 void create_thread_pool(int n_threads)
 {
-    pthread_t threads[n_threads];
-    int id_thread[n_threads];
     int i;
 
     #ifdef DEBUG
         printf("Creating thread pool\n");
     #endif
 
+    if((threads = malloc(n_threads * sizeof(pthread_t))) == NULL){
+        perror("While allocating space for thread pool\n");
+        return;
+    }
+
+    if((id_threads = malloc(n_threads * sizeof(int))) == NULL){
+        perror("While allocating space for thread pool id\n");
+        return;
+    }
+
     for(i = 0; i < n_threads; i++){
-        id_thread[i] = i;
-        pthread_create(&threads[i], NULL, worker, &id_thread[i]);
+        id_threads[i] = i;
+        pthread_create(&threads[i], NULL, worker, &id_threads[i]);
     }
 
     for(i = 0; i < n_threads; i++){
@@ -138,23 +168,109 @@ void create_thread_pool(int n_threads)
 
 void* worker(void* idp)
 {
+    pthread_t thread_id = *((pthread_t*) idp);
+    int request_type, socket, n_threads, thread_number, i;
+    char file[LENGTH_SCRIPT_NAME];
+    char request_arrival[LENGTH_TIME];
+    char request_handled[LENGTH_TIME];
+    config_struct* config;
+    stat_struct msg;
+
+    writeHourPresent(request_arrival);
+
+    config = shmat(shmid, NULL, 0);
+
+    sem_wait(mutex);
+    n_threads = config->n_threads;
+    sem_post(mutex);
+
+    for(i = 0; i < n_threads; i++){
+        if(threads[i] == thread_id){
+            thread_number = i + 1;
+        }
+    }
+
+    while(1){
+        sem_wait(full);
+        sem_wait(buffer_mutex);
+
+        #ifdef DEBUG_THREADS
+            printf("\nTREAD WORKING\nThread pulling out of buffer\n");
+        #endif
+        printf("Request: %d\tFile: %s\tSocket: %d\n", buffer[0].request_type, buffer[0].file, buffer[0].socket);
+        request_type = buffer[0].request_type;
+        strcpy(file, buffer[0].file);
+        socket = buffer[0].socket;
+
+        #ifdef DEBUG_THREADS
+            printf("Erasing pulled buffer request\n");
+        #endif
+
+        delete_element();
+
+        sem_post(buffer_mutex);
+        sem_post(empty);
+
+        #ifdef DEBUG
+            printf("Thread nº%d starting to work\tRequest type: %d\tFile: %s\tSocket: %d\n", thread_number, request_type, file, socket);
+        #endif
+
+        if(request_type == 0){
+            send_page(new_conn);
+        } else if(request_type == 1){
+            execute_script(new_conn);
+        } else {
+
+        }
+
+        /*writeHourPresent(request_handled);
+
+        msg.request_type = request_type;
+        msg.thread_number = thread_number;
+        strcpy(msg.file, file);
+        strcpy(msg.request_arrival, request_arrival);
+        strcpy(msg.request_handled, request_handled);
+
+        #ifdef DEBUG_THREADS
+            printf("Sending mensage\n");
+        #endif
+
+        if(msgsnd(mqid, &msg, sizeof(msg), 0) != 0){
+            perror("Failed to send message\n");
+            return NULL;
+        } else {
+            #ifdef DEBUG
+                printf("Message send successfully\n");
+            #endif
+        }*/
+
+        // Terminate connection with client
+        close(new_conn);
+    }
     return NULL;
 }
 
 void* scheduller(void* idp)
 {
-    int socket_conn;
-    int port, policy;
+    int socket_conn, i, policy, n_threads;
+    char allowed_scripts[N_SCRIPTS][LENGTH_SCRIPT_NAME];
     config_struct* config;
     struct sockaddr_in client_name;
     socklen_t client_name_len = sizeof(client_name);
 
     config = shmat(shmid, NULL, 0);
+    buffer_write = 0;
 
     sem_wait(mutex);
     port = config->port;
     policy = config->policy;
+    n_threads = config->n_threads;
+    for(i = 0; i < N_SCRIPTS; i++){
+        strcpy(allowed_scripts[i], config->scripts[i]);
+    }
     sem_post(mutex);
+
+    buffer_size = n_threads * 2;
 
     if ( (socket_conn = fireup(port)) == -1) {
         exit(1);
@@ -169,27 +285,201 @@ void* scheduller(void* idp)
             exit(1);
         }
 
+        #ifdef DEBUG
+            printf("\nIndentify new client\n");
+        #endif
+
         // Identify new client
         identify(new_conn);
 
         // Process request
         get_request(new_conn);
 
-        // Verify if request is for a page or script
-        if(!strncmp(req_buf,CGI_EXPR,strlen(CGI_EXPR)))
-            execute_script(new_conn);
-            else
-                // Search file with html page and send to client
-                send_page(new_conn);
+        #ifdef DEBUG
+            printf("Requested: %s\tBuffer Write Pos: %d\t Buffer Size: %d\n", req_buf, buffer_write, buffer_size);
+        #endif
 
-                // Terminate connection with client
-                close(new_conn);
+        if(buffer_write < buffer_size){
 
-            }
+            sem_wait(empty);
+            sem_wait(buffer_mutex);
+
+            validate(allowed_scripts);
+
+            #ifdef DEBUG
+                printf("Validated request type: %d\n", buffer[buffer_write].request_type);
+            #endif
+
+            strcpy(buffer[buffer_write].file, req_buf);
+            buffer[buffer_write].socket = new_conn;
+
+            buffer_write++;
+
+            printf("Request: %d\tFile: %s\tSocket: %d\n", buffer[0].request_type, buffer[0].file, buffer[0].socket);
+
+            //sort_buffer(policy);
+
+            sem_post(buffer_mutex);
+            sem_post(full);
+
+            #ifdef DEBUG
+                printf("Done! Threads work now...\n");
+            #endif
+        } else {
+            //Buffer cheio
+            send(new_conn, "Buffer cheio\n", strlen("Buffer cheio\n") + 1, 0);
+        }
+    }
 
     return NULL;
 }
 
+void sort_buffer(int policy)
+{
+    //0-FIFO
+    //1-STAT
+    //2-DIN
+    int i;
+    int k = 0;
+    buffer_struct* aux;
+
+    if(buffer_write > 1){
+        return;
+    }
+
+    if((aux = malloc(buffer_size * sizeof(buffer_struct)) ) == NULL){
+        perror("While creating auxiliar buffer for sorting\n");
+        return;
+    }
+
+    //FIFO não é necessário ordenar
+    if(policy == 1){
+        for(i = 0; i < buffer_write; i++){
+            if(buffer[i].request_type == 0){
+                aux[k].request_type = buffer[i].request_type;
+                strcpy(aux[k].file, buffer[i].file);
+                aux[k].socket = buffer[i].socket;
+                k++;
+            }
+        }
+        for(i = 0; i < buffer_write; i++){
+            if(buffer[i].request_type == 1){
+                aux[k].request_type = buffer[i].request_type;
+                strcpy(aux[k].file, buffer[i].file);
+                aux[k].socket = buffer[i].socket;
+                k++;
+            }
+        }
+    } else if(policy == 2){
+        for(i = 0; i < buffer_write; i++){
+            if(buffer[i].request_type == 1){
+                aux[k].request_type = buffer[i].request_type;
+                strcpy(aux[k].file, buffer[i].file);
+                aux[k].socket = buffer[i].socket;
+                k++;
+            }
+        }
+        for(i = 0; i < buffer_write; i++){
+            if(buffer[i].request_type == 0){
+                aux[k].request_type = buffer[i].request_type;
+                strcpy(aux[k].file, buffer[i].file);
+                aux[k].socket = buffer[i].socket;
+                k++;
+            }
+        }
+    }
+
+    for(i = 0; i < buffer_write; i++){
+        buffer[i].request_type = aux[i].request_type;
+        strcpy(buffer[i].file, aux[i].file);
+        buffer[i].socket = aux[i].socket;
+    }
+
+    free(aux);
+}
+
+
+void validate(char allowed_scripts[N_SCRIPTS][LENGTH_SCRIPT_NAME])
+{
+    int i, type;
+    FILE* fp;
+
+
+    #ifdef DEBUG_VALIDATE
+        printf("Enter validate: ");
+    #endif
+    type = get_type();
+    printf("type: %d\n", type);
+    if(type == 0){
+        sprintf(buf_tmp,"htdocs/%s",req_buf);
+        if((fp = fopen(buf_tmp, "r")) != NULL){
+            fclose(fp);
+            buffer[buffer_write].request_type = 0;
+            return;
+        }
+        buffer[buffer_write].request_type = 2;
+    } else if(type == 1){
+        sprintf(buf_tmp,"scripts/%s",req_buf);
+        for(i = 0; i < N_SCRIPTS; i++){
+
+            if(strcmp(req_buf, allowed_scripts[i]) == 0){
+                if((fp = fopen(buf_tmp, "r")) != NULL){
+                    fclose(fp);
+                    buffer[buffer_write].request_type = 1;
+                    return;
+                }
+            }
+        }
+        buffer[buffer_write].request_type = 2;
+    } else {
+        buffer[buffer_write].request_type = 2;
+    }
+}
+
+int get_type()
+{
+    char file_temp[LENGTH_SCRIPT_NAME];
+    char* token;
+    strcpy(file_temp, req_buf);
+
+    token = strtok(file_temp, ".");
+    token = strtok(NULL, " ");
+    printf("'%s'\t", token);
+
+    if(strcmp(token, "html") == 0){
+        #ifdef DEBUG_VALIDATE
+            printf("Static request, ");
+        #endif
+        return 0;
+    } else if(strcmp(token, "sh") == 0){
+        #ifdef DEBUG_VALIDATE
+            printf("Dynamic request, ");
+        #endif
+        return 1;
+    } else {
+        #ifdef DEBUG_VALIDATE
+            printf("File type request unsupported, ");
+        #endif
+        return 2;
+    }
+}
+
+
+void delete_element(){
+    int i;
+
+    #ifdef DEBUG_THREADS
+        printf("Moving buffer elements one left\n");
+    #endif
+
+    for(i = 1; i < buffer_write; i++){
+        buffer[i - 1].request_type = buffer[i].request_type;
+        strcpy(buffer[i - 1].file, buffer[i].file);
+        buffer[i - 1].socket = buffer[i].socket;
+    }
+
+    buffer_write--;
+}
 
 // Creates, prepares and returns new socket
 int fireup(int port)
@@ -243,14 +533,14 @@ void get_request(int socket)
         // Currently only supports GET
         if(!found_get) {
             printf("Request from client without a GET\n");
-            exit(1);
+            // exit(1);
         }
         // If no particular page is requested then we consider htdocs/index.html
         if(!strlen(req_buf))
             sprintf(req_buf,"index.html");
 
             #ifdef DEBUG
-            printf("get_request: client requested the following page: %s\n",req_buf);
+                //printf("get_request: client requested the following page: %s\n",req_buf); STOR
             #endif
 
             return;
@@ -258,10 +548,10 @@ void get_request(int socket)
 
 
         // Send message header (before html page) to client
-        void send_header(int socket)
+void send_header(int socket)
     {
         #ifdef DEBUG
-        printf("send_header: sending HTTP header to client\n");
+        //printf("send_header: sending HTTP header to client\n"); STOR
         #endif
         sprintf(buf,HEADER_1);
         send(socket,buf,strlen(HEADER_1),0);
@@ -277,9 +567,58 @@ void get_request(int socket)
 // Execute script in /cgi-bin
 void execute_script(int socket)
 {
-    // Currently unsupported, return error code to client
-    cannot_execute(socket);
+    printf("execute_script\n");
+    char data[SIZE_BUF];
 
+    char buf_tmp3[512];
+    char command[512];
+
+
+    FILE * fp;
+    FILE * pf;
+
+
+    // Searchs for page in directory htdocs
+    sprintf(buf_tmp,"scripts/%s",req_buf);
+
+    #ifdef DEBUG
+    printf("send_script: searching for %s\n",buf_tmp);
+    #endif
+
+    // Verifies if file exists
+    if((fp=fopen(buf_tmp,"r"))==NULL) {
+        // Page not found, send error to client
+        printf("send_script: script %s not found, alerting client\n",buf_tmp);
+        cannot_execute(socket);
+    }
+    else {
+        send_header(socket);
+        while(fgets(buf_tmp3,512,fp))
+        {
+            snprintf(command,512,"%s", buf_tmp3);
+            pf=popen(command, "r");
+
+
+            if(!pf)
+            {
+                fprintf(stderr, "could not open pipe for output.\n");
+                return;
+            }
+
+
+            send(socket, "<html><body>", strlen("<html><body>"),0);
+
+            while(fgets(data, SIZE_BUF, pf))
+            {
+                send(socket,data,strlen(data),0);
+                send(socket, "<p>", strlen("<p>"),0);
+            }
+
+            fclose(pf);
+            send(socket, "</body></html>", strlen("</body></html>"),0);
+        }
+        fclose(fp);
+    }
     return;
 }
 
@@ -293,7 +632,7 @@ void send_page(int socket)
     sprintf(buf_tmp,"htdocs/%s",req_buf);
 
     #ifdef DEBUG
-    printf("send_page: searching for %s\n",buf_tmp);
+    //printf("send_page: searching for %s\n",buf_tmp); STOR
     #endif
 
     // Verifies if file exists
@@ -338,7 +677,7 @@ void identify(int socket)
     port = ntohs(s->sin_port);
     inet_ntop(AF_INET, &s->sin_addr, ipstr, sizeof ipstr);
 
-    printf("identify: received new request from %s port %d\n",ipstr,port);
+    //printf("identify: received new request from %s port %d\n",ipstr,port); STOR
 
     return;
 }
@@ -358,7 +697,7 @@ int read_line(int socket,int n)
     while (n_read<n && not_eol) {
         ret = read(socket,&new_char,sizeof(char));
         if (ret == -1) {
-            printf("Error reading from socket (read_line)");
+            printf("Error reading from socket (read_line)\n");
             return -1;
         }
         else if (ret == 0) {
@@ -378,7 +717,7 @@ int read_line(int socket,int n)
 
     buf[n_read]='\0';
     #ifdef DEBUG
-    printf("read_line: new line read from client socket: %s\n",buf);
+    //printf("read_line: new line read from client socket: %s\n",buf); STOR
     #endif
 
     return n_read;
@@ -418,4 +757,30 @@ void cannot_execute(int socket)
     send(socket,buf, strlen(buf), 0);
 
     return;
+}
+
+void sigint_handler(){
+    int i;
+    int size_proc = sizeof(id_proc)/sizeof(id_proc[0]);
+    int size_thread = sizeof(threads)/sizeof(threads[0]);
+
+    printf("Server terminating...");
+
+    for(i = 0; i < size_thread; i++){
+        printf("Canceling thread\n");
+        pthread_cancel(threads[i]);
+    }
+
+    for(i = 0; i < size_proc; i++){
+        kill(id_proc[i], SIGKILL);
+    }
+
+    printf("Closing Sockets\n");
+    close(socket_conn);
+    close(new_conn);
+
+}
+
+void catch_ctrlz(){
+    raise(SIGHUP);
 }

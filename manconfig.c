@@ -35,6 +35,7 @@ int configuration()
     //Scripts
     for(i = 0; i < N_SCRIPTS; i++){
         fgets(config->scripts[i], LENGTH_SCRIPT_NAME-1, fp);
+        config->scripts[i][strlen(config->scripts[i]) - 1] = 0;
     }
 
     sem_post(mutex);

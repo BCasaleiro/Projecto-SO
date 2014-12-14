@@ -1,6 +1,6 @@
-3144
+3001
 2
 0
-test.sh
+gods.sh
 test1.sh
 test2.sh

@@ -8,10 +8,11 @@ typedef struct{
     char request_arrival[LENGTH_TIME];
     char request_handled[LENGTH_TIME];
 }stat_struct;
- 
+
 int mqid, total_din, total_stat, total_refused;
 char sv_start[LENGTH_TIME];
-char sv_actual[LENGTH_TIME];
 
 void get_message();
-void writeHourPresent(char* time_string);
+void writeHourPresent(char time_string[LENGTH_TIME]);
+
+void sighup_handler();
